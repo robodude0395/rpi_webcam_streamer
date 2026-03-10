@@ -294,16 +294,25 @@
             </div>
 
             <div class="audio-container" id="audioContainer" style="display: none;">
-                <audio id="audioPlayer" controls></audio>
+                <div style="padding: 10px; background: #e8f5e9; border-radius: 4px; margin-bottom: 10px;">
+                    <strong>Audio Status:</strong> <span id="audioStatus">Connecting...</span>
+                </div>
+                <canvas id="audioVisualizer" width="800" height="100" style="width: 100%; background: #000; border-radius: 4px;"></canvas>
             </div>
         </div>
     </div>
 
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/audio_websocket.js"></script>
     <script>
         // State
         let devices = { video_devices: [], audio_devices: [] };
         let streamActive = false;
         let statusInterval = null;
+        let audioSocket = null;
+        let audioContext = null;
+        let audioQueue = [];
+        let isPlayingAudio = false;
 
         // DOM elements
         const videoDeviceSelect = document.getElementById('videoDevice');
@@ -318,7 +327,7 @@
         const statusDetails = document.getElementById('statusDetails');
         const videoContainer = document.getElementById('videoContainer');
         const audioContainer = document.getElementById('audioContainer');
-        const audioPlayer = document.getElementById('audioPlayer');
+        const audioStatus = document.getElementById('audioStatus');
         const errorMessage = document.getElementById('errorMessage');
 
         // Initialize
@@ -441,29 +450,7 @@
                 // Show audio stream if enabled
                 if (audioEnabled) {
                     audioContainer.style.display = 'block';
-                    const audioUrl = `/audio_feed?t=${Date.now()}`;
-                    console.log('Loading audio from:', audioUrl);
-                    audioPlayer.src = audioUrl;
-
-                    // Add error handlers
-                    audioPlayer.onerror = (e) => {
-                        console.error('Audio player error:', e);
-                        console.error('Audio error code:', audioPlayer.error?.code);
-                        console.error('Audio error message:', audioPlayer.error?.message);
-                    };
-
-                    audioPlayer.onloadedmetadata = () => {
-                        console.log('Audio metadata loaded');
-                    };
-
-                    audioPlayer.oncanplay = () => {
-                        console.log('Audio can play');
-                    };
-
-                    audioPlayer.play().catch(e => {
-                        console.error('Audio autoplay prevented or failed:', e);
-                        showError('Audio autoplay blocked. Click the play button on the audio player.');
-                    });
+                    startWebSocketAudio();
                 } else {
                     audioContainer.style.display = 'none';
                 }
@@ -504,8 +491,8 @@
                 videoContainer.innerHTML = '<div class="video-placeholder">Video stream will appear here</div>';
 
                 // Clear audio stream
+                stopWebSocketAudio();
                 audioContainer.style.display = 'none';
-                audioPlayer.src = '';
 
                 // Stop status polling
                 if (statusInterval) {

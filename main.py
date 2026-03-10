@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_socketio import SocketIO, emit
 from typing import Optional, List
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -16,6 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 
 class StreamState(Enum):
@@ -76,6 +78,11 @@ video_process: Optional[subprocess.Popen] = None
 audio_process: Optional[subprocess.Popen] = None
 stream_state = StreamState.STOPPED
 stream_start_time: Optional[float] = None
+stream_error_message: Optional[str] = None
+monitor_thread: Optional[threading.Thread] = None
+monitor_running = False
+audio_broadcast_thread: Optional[threading.Thread] = None
+audio_broadcast_running = False
 stream_error_message: Optional[str] = None
 monitor_thread: Optional[threading.Thread] = None
 monitor_running = False
@@ -204,6 +211,33 @@ def gen_audio():
             yield chunk
     except Exception as e:
         logger.error(f"Error in audio generator: {e}")
+
+
+def broadcast_audio():
+    """Broadcast audio chunks to all connected WebSocket clients"""
+    global audio_process, audio_broadcast_running
+
+    logger.info("Audio broadcast thread started")
+
+    while audio_broadcast_running and audio_process:
+        try:
+            if audio_process.poll() is not None:
+                logger.warning("Audio process terminated, stopping broadcast")
+                break
+
+            chunk = audio_process.stdout.read(4096)
+            if not chunk:
+                break
+
+            # Broadcast to all connected clients
+            socketio.emit('audio_data', {'data': chunk.hex()}, namespace='/audio')
+
+        except Exception as e:
+            logger.error(f"Error broadcasting audio: {e}")
+            break
+
+    audio_broadcast_running = False
+    logger.info("Audio broadcast thread stopped")
 
 
 # REST API Endpoints
@@ -415,6 +449,13 @@ def start_stream():
                     bufsize=10**8
                 )
                 logger.info(f"Started audio stream: {current_config.audio_device} at {current_config.audio_sample_rate}Hz")
+
+                # Start audio broadcast thread
+                global audio_broadcast_running, audio_broadcast_thread
+                audio_broadcast_running = True
+                audio_broadcast_thread = threading.Thread(target=broadcast_audio, daemon=True)
+                audio_broadcast_thread.start()
+                logger.info("Audio WebSocket broadcast enabled")
             except Exception as e:
                 # Audio failure is non-fatal - continue with video only
                 logger.warning(f"Failed to start audio stream: {e}. Continuing with video-only mode.")
@@ -464,7 +505,7 @@ def stop_stream():
     """
     Stop all active streams (video and audio).
     """
-    global video_process, audio_process, stream_state, stream_start_time, stream_error_message, monitor_running, monitor_thread
+    global video_process, audio_process, stream_state, stream_start_time, stream_error_message, monitor_running, monitor_thread, audio_broadcast_running, audio_broadcast_thread
 
     try:
         # Stop monitoring thread
@@ -474,6 +515,14 @@ def stop_stream():
                 monitor_thread.join(timeout=2)
                 monitor_thread = None
             logger.info("Stream health monitoring stopped")
+
+        # Stop audio broadcast thread
+        if audio_broadcast_running:
+            audio_broadcast_running = False
+            if audio_broadcast_thread:
+                audio_broadcast_thread.join(timeout=2)
+                audio_broadcast_thread = None
+            logger.info("Audio broadcast stopped")
 
         # Stop video process
         if video_process:
@@ -615,4 +664,4 @@ def serve_static(filename):
     return send_from_directory('static', filename)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, threaded=True)
+    socketio.run(app, host='0.0.0.0', port=8080, debug=False, allow_unsafe_werkzeug=True)
