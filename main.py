@@ -241,9 +241,7 @@ def _cleanup_streams():
     logger.info("Stream cleanup complete")
 
 
-
-
-
+@app.route('/api/stream/start', methods=['POST'])
 def start_stream():
     """Start video and audio streams"""
     global current_config, video_capture, audio_stream, audio_input_stream
@@ -357,7 +355,7 @@ def start_stream():
         }), 500
 
 
-
+@app.route('/api/stream/stop', methods=['POST'])
 def stop_stream():
     """Stop all streams"""
     try:
