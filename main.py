@@ -52,7 +52,7 @@ class StreamConfig:
         ]
 
     def to_ffmpeg_audio_args(self) -> List[str]:
-        """Generate FFmpeg arguments for audio capture with low latency"""
+        """Generate FFmpeg arguments for audio capture with streaming support"""
         if not self.audio_enabled or not self.audio_device:
             return []
         return [
@@ -61,8 +61,11 @@ class StreamConfig:
             "-i", self.audio_device,
             "-ar", str(self.audio_sample_rate),
             "-ac", str(self.audio_channels),
-            "-f", "wav",
-            "-c:a", "pcm_s16le",
+            "-c:a", "libmp3lame",
+            "-b:a", "128k",
+            "-f", "mp3",
+            "-fflags", "+nobuffer",
+            "-flags", "low_delay",
             "pipe:1"
         ]
 
@@ -195,7 +198,7 @@ def gen_audio():
 
     try:
         while audio_process and audio_process.poll() is None:
-            chunk = audio_process.stdout.read(4096)
+            chunk = audio_process.stdout.read(8192)  # Smaller chunks for lower latency
             if not chunk:
                 break
             yield chunk
@@ -585,10 +588,19 @@ def video_feed():
 
 @app.route('/audio_feed')
 def audio_feed():
-    """Stream audio if enabled with low latency"""
+    """Stream audio if enabled"""
     if not current_config.audio_enabled:
         return Response("Audio not enabled", status=400)
-    return Response(gen_audio(), mimetype='audio/wav')
+
+    def generate():
+        for chunk in gen_audio():
+            yield chunk
+
+    return Response(generate(), mimetype='audio/mpeg', headers={
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    })
 
 
 @app.route('/')
