@@ -54,7 +54,7 @@ class StreamConfig:
         ]
 
     def to_ffmpeg_audio_args(self) -> List[str]:
-        """Generate FFmpeg arguments for audio capture with streaming support"""
+        """Generate FFmpeg arguments for audio capture - raw PCM for WebSocket streaming"""
         if not self.audio_enabled or not self.audio_device:
             return []
         return [
@@ -63,11 +63,8 @@ class StreamConfig:
             "-i", self.audio_device,
             "-ar", str(self.audio_sample_rate),
             "-ac", str(self.audio_channels),
-            "-c:a", "libmp3lame",
-            "-b:a", "128k",
-            "-f", "mp3",
-            "-fflags", "+nobuffer",
-            "-flags", "low_delay",
+            "-f", "s16le",
+            "-acodec", "pcm_s16le",
             "pipe:1"
         ]
 
@@ -669,7 +666,11 @@ def audio_feed():
 @app.route('/')
 def index():
     """Serve the main web UI"""
-    return send_from_directory('static', 'index.html')
+    response = send_from_directory('static', 'index.html')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @app.route('/static/<path:filename>')
