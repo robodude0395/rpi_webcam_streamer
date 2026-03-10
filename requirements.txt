@@ -4,6 +4,10 @@ python-socketio
 gevent
 gevent-websocket
 opencv-python
-pyaudio
 pytest>=7.0.0
 pytest-mock>=3.10.0
+
+# Optional: Install via system package for better compatibility on Raspberry Pi
+# sudo apt-get install python3-pyaudio
+# Or install via pip (requires python3-dev and portaudio19-dev):
+# pyaudio

@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from enum import Enum
 import device_detector
 import cv2
-import pyaudio
+
+# Try to import pyaudio, fall back gracefully if not available
+try:
+    import pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    PYAUDIO_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +22,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+if not PYAUDIO_AVAILABLE:
+    logger.warning("PyAudio not available. Audio streaming will be disabled. Install with: sudo apt-get install python3-pyaudio")
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
@@ -47,7 +56,7 @@ class StreamConfig:
 # Global stream configuration and state
 current_config = StreamConfig()
 video_capture: Optional[cv2.VideoCapture] = None
-audio_stream: Optional[pyaudio.PyAudio] = None
+audio_stream = None
 audio_input_stream = None
 stream_state = StreamState.STOPPED
 stream_start_time: Optional[float] = None
@@ -221,7 +230,8 @@ def get_devices():
         return jsonify({
             'success': True,
             'video_devices': video_devices,
-            'audio_devices': audio_devices
+            'audio_devices': audio_devices,
+            'pyaudio_available': PYAUDIO_AVAILABLE
         })
     except Exception as e:
         logger.error(f"Error detecting devices: {e}")
@@ -239,19 +249,6 @@ def get_devices():
 def start_stream():
     """
     Start video and optional audio streams with the provided configuration.
-
-    Expected JSON body:
-    {
-        "video_device": "/dev/video0",
-        "video_device_index": 0,
-        "resolution": [640, 480],
-        "frame_rate": 30,
-        "audio_enabled": false,
-        "audio_device": null,
-        "audio_device_index": 0,
-        "audio_sample_rate": 44100,
-        "audio_channels": 2
-    }
     """
     global current_config, video_capture, audio_stream, audio_input_stream
     global stream_state, stream_start_time, stream_error_message
@@ -404,33 +401,40 @@ def start_stream():
 
         # Start audio capture if enabled
         if current_config.audio_enabled:
-            try:
-                audio_stream = pyaudio.PyAudio()
-                audio_input_stream = audio_stream.open(
-                    format=pyaudio.paInt16,
-                    channels=current_config.audio_channels,
-                    rate=current_config.audio_sample_rate,
-                    input=True,
-                    input_device_index=current_config.audio_device_index,
-                    frames_per_buffer=current_config.audio_chunk_size
-                )
-
-                logger.info(f"Started audio capture: device {current_config.audio_device_index} at {current_config.audio_sample_rate}Hz, {current_config.audio_channels} channels")
-
-                # Start audio broadcast thread
-                audio_broadcast_running = True
-                audio_broadcast_thread = threading.Thread(target=broadcast_audio, daemon=True)
-                audio_broadcast_thread.start()
-                logger.info("Audio WebSocket broadcast enabled")
-
-            except Exception as e:
-                # Audio failure is non-fatal - continue with video only
-                logger.warning(f"Failed to start audio stream: {e}. Continuing with video-only mode.")
+            if not PYAUDIO_AVAILABLE:
+                logger.warning("PyAudio not available. Install with: sudo apt-get install python3-pyaudio. Continuing with video-only mode.")
                 current_config.audio_enabled = False
-                audio_input_stream = None
-                if audio_stream:
-                    audio_stream.terminate()
-                    audio_stream = None
+            else:
+                try:
+                    audio_stream = pyaudio.PyAudio()
+                    audio_input_stream = audio_stream.open(
+                        format=pyaudio.paInt16,
+                        channels=current_config.audio_channels,
+                        rate=current_config.audio_sample_rate,
+                        input=True,
+                        input_device_index=current_config.audio_device_index,
+                        frames_per_buffer=current_config.audio_chunk_size
+                    )
+
+                    logger.info(f"Started audio capture: device {current_config.audio_device_index} at {current_config.audio_sample_rate}Hz, {current_config.audio_channels} channels")
+
+                    # Start audio broadcast thread
+                    audio_broadcast_running = True
+                    audio_broadcast_thread = threading.Thread(target=broadcast_audio, daemon=True)
+                    audio_broadcast_thread.start()
+                    logger.info("Audio WebSocket broadcast enabled")
+
+                except Exception as e:
+                    # Audio failure is non-fatal - continue with video only
+                    logger.warning(f"Failed to start audio stream: {e}. Continuing with video-only mode.")
+                    current_config.audio_enabled = False
+                    audio_input_stream = None
+                    if audio_stream:
+                        try:
+                            audio_stream.terminate()
+                        except:
+                            pass
+                        audio_stream = None
 
         # Update state
         stream_state = StreamState.RUNNING
@@ -560,7 +564,8 @@ def get_stream_status():
             'state': stream_state.value,
             'uptime_seconds': uptime_seconds,
             'audio_active': current_config.audio_enabled and audio_input_stream is not None,
-            'error_message': stream_error_message
+            'error_message': stream_error_message,
+            'pyaudio_available': PYAUDIO_AVAILABLE
         }
 
         # Include configuration if stream is running or in error state
