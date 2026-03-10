@@ -303,92 +303,8 @@
     </div>
 
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/realtime_audio.js"></script>
     <script>
-        // WebSocket Audio Functions
-        let audioSocket = null;
-        let audioContext = null;
-        let nextStartTime = 0;
-
-        function startWebSocketAudio() {
-            const audioStatus = document.getElementById('audioStatus');
-
-            // Initialize Web Audio API
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 44100
-                });
-            }
-
-            // Connect to WebSocket
-            audioSocket = io('/audio', {
-                transports: ['websocket']
-            });
-
-            audioSocket.on('connect', () => {
-                console.log('Audio WebSocket connected');
-                audioStatus.textContent = 'Connected - Playing live audio';
-                audioStatus.style.color = '#2e7d32';
-            });
-
-            audioSocket.on('audio_data', (data) => {
-                try {
-                    // Convert hex string back to binary PCM data
-                    const hexString = data.data;
-                    const bytes = new Uint8Array(hexString.length / 2);
-                    for (let i = 0; i < hexString.length; i += 2) {
-                        bytes[i / 2] = parseInt(hexString.substr(i, 2), 16);
-                    }
-
-                    // Convert bytes to Int16Array (PCM s16le format)
-                    const pcmData = new Int16Array(bytes.buffer);
-
-                    // Create audio buffer
-                    const audioBuffer = audioContext.createBuffer(1, pcmData.length, 44100);
-                    const channelData = audioBuffer.getChannelData(0);
-
-                    // Convert PCM int16 to float32 (-1.0 to 1.0)
-                    for (let i = 0; i < pcmData.length; i++) {
-                        channelData[i] = pcmData[i] / 32768.0;
-                    }
-
-                    // Create source and play
-                    const source = audioContext.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(audioContext.destination);
-
-                    // Schedule playback
-                    const currentTime = audioContext.currentTime;
-                    if (nextStartTime < currentTime) {
-                        nextStartTime = currentTime;
-                    }
-                    source.start(nextStartTime);
-                    nextStartTime += audioBuffer.duration;
-                } catch (error) {
-                    console.error('Error processing audio data:', error);
-                }
-            });
-
-            audioSocket.on('disconnect', () => {
-                console.log('Audio WebSocket disconnected');
-                audioStatus.textContent = 'Disconnected';
-                audioStatus.style.color = '#c62828';
-            });
-
-            audioSocket.on('error', (error) => {
-                console.error('Audio WebSocket error:', error);
-                audioStatus.textContent = 'Error: ' + error;
-                audioStatus.style.color = '#c62828';
-            });
-        }
-
-        function stopWebSocketAudio() {
-            if (audioSocket) {
-                audioSocket.disconnect();
-                audioSocket = null;
-            }
-            nextStartTime = 0;
-        }
-
         // State
         let devices = { video_devices: [], audio_devices: [] };
         let streamActive = false;
@@ -495,14 +411,13 @@
 
                 const config = {
                     video_device: videoDevice,
-                    video_format: 'yuyv422',
+                    video_device_index: 0,  // Will be parsed from device path
                     resolution: resolution,
                     frame_rate: frameRate,
                     audio_enabled: audioEnabled,
-                    audio_device: audioDevice,
-                    audio_format: 's16le',
-                    audio_sample_rate: 44100,
-                    audio_channels: 1
+                    audio_device_index: 1,  // Default audio device
+                    audio_sample_rate: 16000,  // Match server config
+                    audio_channels: 1  // Mono for efficiency
                 };
 
                 const response = await fetch('/api/stream/start', {
@@ -530,7 +445,7 @@
                 // Show audio stream if enabled
                 if (audioEnabled) {
                     audioContainer.style.display = 'block';
-                    startWebSocketAudio();
+                    startRealtimeAudio();
                 } else {
                     audioContainer.style.display = 'none';
                 }
@@ -571,7 +486,7 @@
                 videoContainer.innerHTML = '<div class="video-placeholder">Video stream will appear here</div>';
 
                 // Clear audio stream
-                stopWebSocketAudio();
+                stopRealtimeAudio();
                 audioContainer.style.display = 'none';
 
                 // Stop status polling
