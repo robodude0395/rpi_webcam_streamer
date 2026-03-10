@@ -34,10 +34,18 @@ HTML_TEMPLATE = """
             border: 2px solid #444;
             border-radius: 8px;
         }
-        audio {
-            width: 100%;
-            max-width: 640px;
+        .audio-link {
+            display: inline-block;
             margin-top: 20px;
+            padding: 15px 30px;
+            background: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 18px;
+        }
+        .audio-link:hover {
+            background: #45a049;
         }
     </style>
 </head>
@@ -45,10 +53,8 @@ HTML_TEMPLATE = """
     <h1>Webcam Stream</h1>
     <img src="/video" alt="Video Stream">
     <br>
-    <audio controls autoplay>
-        <source src="/audio" type="audio/mpeg">
-        Your browser doesn't support audio streaming.
-    </audio>
+    <a href="/audio" class="audio-link" target="_blank">🔊 Open Audio Stream</a>
+    <p style="color: #999; margin-top: 10px;">Click to open audio in a new tab</p>
 </body>
 </html>
 """
@@ -128,4 +134,5 @@ if __name__ == '__main__':
     print(f"Video: {VIDEO_DEVICE} at {WIDTH}x{HEIGHT}@{FPS}fps")
     print(f"Audio: {AUDIO_DEVICE}")
     print(f"\nOpen http://0.0.0.0:8080 in your browser")
+    print(f"Click the audio button to open audio in a new tab")
     app.run(host='0.0.0.0', port=8080, threaded=True)
