@@ -200,23 +200,62 @@ def get_devices():
                 'details': str(e)
             }
         }), 500
+def _cleanup_streams():
+    """Internal helper to cleanup all stream resources"""
+    global video_capture, audio_stream, audio_input_stream, audio_streaming
+    global stream_state, stream_start_time, stream_error_message
+
+    logger.info("Cleaning up existing streams...")
+
+    # Stop audio
+    audio_streaming = False
+
+    if audio_input_stream:
+        try:
+            audio_input_stream.stop_stream()
+            audio_input_stream.close()
+        except Exception as e:
+            logger.warning(f"Error closing audio input stream: {e}")
+        audio_input_stream = None
+
+    if audio_stream:
+        try:
+            audio_stream.terminate()
+        except Exception as e:
+            logger.warning(f"Error terminating audio stream: {e}")
+        audio_stream = None
+
+    # Stop video
+    if video_capture:
+        try:
+            video_capture.release()
+        except Exception as e:
+            logger.warning(f"Error releasing video capture: {e}")
+        video_capture = None
+
+    # Reset state
+    stream_state = StreamState.STOPPED
+    stream_start_time = None
+    stream_error_message = None
+
+    logger.info("Stream cleanup complete")
 
 
-@app.route('/api/stream/start', methods=['POST'])
+
+
+
 def start_stream():
     """Start video and audio streams"""
     global current_config, video_capture, audio_stream, audio_input_stream
-    global stream_state, stream_start_time, stream_error_message
+    global stream_state, stream_start_time, stream_error_message, audio_streaming
 
     try:
-        if stream_state == StreamState.RUNNING:
-            return jsonify({
-                'success': False,
-                'error': {
-                    'code': 'STREAM_ALREADY_RUNNING',
-                    'message': 'Stream is already running'
-                }
-            }), 400
+        # If stream is already running or starting, clean up first
+        if stream_state in [StreamState.RUNNING, StreamState.STARTING]:
+            logger.warning("Stream already active, cleaning up before restart")
+            _cleanup_streams()
+            # Small delay to ensure resources are released
+            time.sleep(0.1)
 
         data = request.get_json() or {}
 
@@ -251,6 +290,7 @@ def start_stream():
             stream_state = StreamState.ERROR
             stream_error_message = f"Failed to start video: {str(e)}"
             logger.error(stream_error_message)
+            _cleanup_streams()
             return jsonify({
                 'success': False,
                 'error': {
@@ -306,6 +346,7 @@ def start_stream():
         stream_state = StreamState.ERROR
         stream_error_message = str(e)
         logger.error(f"Error starting stream: {e}")
+        _cleanup_streams()
         return jsonify({
             'success': False,
             'error': {
@@ -316,42 +357,11 @@ def start_stream():
         }), 500
 
 
-@app.route('/api/stream/stop', methods=['POST'])
+
 def stop_stream():
     """Stop all streams"""
-    global video_capture, audio_stream, audio_input_stream, audio_streaming
-    global stream_state, stream_start_time, stream_error_message
-
     try:
-        # Stop audio
-        audio_streaming = False
-
-        if audio_input_stream:
-            try:
-                audio_input_stream.stop_stream()
-                audio_input_stream.close()
-            except:
-                pass
-            audio_input_stream = None
-            logger.info("Stopped audio stream")
-
-        if audio_stream:
-            try:
-                audio_stream.terminate()
-            except:
-                pass
-            audio_stream = None
-
-        # Stop video
-        if video_capture:
-            video_capture.release()
-            video_capture = None
-            logger.info("Stopped video capture")
-
-        # Update state
-        stream_state = StreamState.STOPPED
-        stream_start_time = None
-        stream_error_message = None
+        _cleanup_streams()
 
         return jsonify({
             'success': True,
@@ -368,6 +378,7 @@ def stop_stream():
                 'details': str(e)
             }
         }), 500
+
 
 
 @app.route('/api/stream/status', methods=['GET'])
