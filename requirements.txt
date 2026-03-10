@@ -3,5 +3,7 @@ flask-socketio
 python-socketio
 gevent
 gevent-websocket
+opencv-python
+pyaudio
 pytest>=7.0.0
 pytest-mock>=3.10.0

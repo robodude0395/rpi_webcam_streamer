@@ -1,13 +1,14 @@
-import subprocess
 import time
 import logging
 import threading
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
-from typing import Optional, List
-from dataclasses import dataclass, asdict
+from typing import Optional
+from dataclasses import dataclass
 from enum import Enum
 import device_detector
+import cv2
+import pyaudio
 
 # Configure logging
 logging.basicConfig(
@@ -27,52 +28,27 @@ class StreamState(Enum):
     RUNNING = "running"
     ERROR = "error"
 
+
 @dataclass
 class StreamConfig:
     """Configuration for video and audio streams"""
     video_device: str = "/dev/video0"
-    video_format: str = "yuyv422"
+    video_device_index: int = 0
     resolution: tuple = (640, 480)
     frame_rate: int = 30
     audio_enabled: bool = False
     audio_device: Optional[str] = None
-    audio_format: str = "s16le"
+    audio_device_index: int = 0
     audio_sample_rate: int = 44100
-    audio_channels: int = 1
-
-    def to_ffmpeg_video_args(self) -> List[str]:
-        """Generate FFmpeg arguments for video capture"""
-        return [
-            "ffmpeg",
-            "-f", "v4l2",
-            "-input_format", self.video_format,
-            "-framerate", str(self.frame_rate),
-            "-video_size", f"{self.resolution[0]}x{self.resolution[1]}",
-            "-i", self.video_device,
-            "-f", "mjpeg",
-            "pipe:1"
-        ]
-
-    def to_ffmpeg_audio_args(self) -> List[str]:
-        """Generate FFmpeg arguments for audio capture - raw PCM for WebSocket streaming"""
-        if not self.audio_enabled or not self.audio_device:
-            return []
-        return [
-            "ffmpeg",
-            "-f", "alsa",
-            "-i", self.audio_device,
-            "-ar", str(self.audio_sample_rate),
-            "-ac", str(self.audio_channels),
-            "-f", "s16le",
-            "-acodec", "pcm_s16le",
-            "pipe:1"
-        ]
+    audio_channels: int = 2
+    audio_chunk_size: int = 1024
 
 
-# Global stream configuration and processes
+# Global stream configuration and state
 current_config = StreamConfig()
-video_process: Optional[subprocess.Popen] = None
-audio_process: Optional[subprocess.Popen] = None
+video_capture: Optional[cv2.VideoCapture] = None
+audio_stream: Optional[pyaudio.PyAudio] = None
+audio_input_stream = None
 stream_state = StreamState.STOPPED
 stream_start_time: Optional[float] = None
 stream_error_message: Optional[str] = None
@@ -80,106 +56,105 @@ monitor_thread: Optional[threading.Thread] = None
 monitor_running = False
 audio_broadcast_thread: Optional[threading.Thread] = None
 audio_broadcast_running = False
-stream_error_message: Optional[str] = None
-monitor_thread: Optional[threading.Thread] = None
-monitor_running = False
+
+
+def gen_wav_header(sample_rate, bits_per_sample, channels):
+    """Generate WAV header for audio streaming"""
+    datasize = 2000 * 10**6
+    o = bytes("RIFF", 'ascii')
+    o += (datasize + 36).to_bytes(4, 'little')
+    o += bytes("WAVE", 'ascii')
+    o += bytes("fmt ", 'ascii')
+    o += (16).to_bytes(4, 'little')
+    o += (1).to_bytes(2, 'little')
+    o += (channels).to_bytes(2, 'little')
+    o += (sample_rate).to_bytes(4, 'little')
+    o += (sample_rate * channels * bits_per_sample // 8).to_bytes(4, 'little')
+    o += (channels * bits_per_sample // 8).to_bytes(2, 'little')
+    o += (bits_per_sample).to_bytes(2, 'little')
+    o += bytes("data", 'ascii')
+    o += (datasize).to_bytes(4, 'little')
+    return o
 
 
 def gen_video():
-    """Generate MJPEG frames from FFmpeg stdout"""
-    global video_process
+    """Generate MJPEG frames from OpenCV VideoCapture"""
+    global video_capture
 
-    # Use the existing video process started by /api/stream/start
-    if not video_process:
-        logger.error("No video process running. Start stream via /api/stream/start first.")
+    if not video_capture or not video_capture.isOpened():
+        logger.error("No video capture running. Start stream via /api/stream/start first.")
         return
 
     try:
-        while video_process and video_process.poll() is None:
-            # MJPEG frames are separated by 0xFFD8 (start) and 0xFFD9 (end)
-            data = b''
-            while True:
-                byte = video_process.stdout.read(1)
-                if not byte:
-                    break
-                data += byte
-                if data[-2:] == b'\xff\xd9':  # JPEG end marker
-                    break
-            if data:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + data + b'\r\n')
-            else:
+        while video_capture and video_capture.isOpened():
+            ret, frame = video_capture.read()
+            if not ret:
+                logger.warning("Failed to read frame from video capture")
                 break
+
+            # Resize frame if needed
+            if frame.shape[1] != current_config.resolution[0] or frame.shape[0] != current_config.resolution[1]:
+                frame = cv2.resize(frame, current_config.resolution)
+
+            # Encode frame as JPEG
+            ret, jpeg = cv2.imencode('.jpg', frame)
+            if not ret:
+                continue
+
+            frame_bytes = jpeg.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+            # Control frame rate
+            time.sleep(1.0 / current_config.frame_rate)
+
     except Exception as e:
         logger.error(f"Error in video generator: {e}")
+    finally:
+        logger.info("Video generator stopped")
 
 
 def monitor_stream_health():
     """
-    Monitor FFmpeg process health and handle failures.
+    Monitor stream health and handle failures.
     Runs in a background thread while streaming is active.
-
-    Implements requirements 6.1, 6.2, 6.4:
-    - Detects when video device becomes unavailable
-    - Detects when audio device becomes unavailable
-    - Captures FFmpeg error output for user presentation
     """
-    global video_process, audio_process, stream_state, stream_error_message, monitor_running
+    global video_capture, audio_input_stream, stream_state, stream_error_message, monitor_running
 
     logger.info("Stream health monitor started")
 
     while monitor_running:
         try:
-            # Check video process health
-            if video_process and video_process.poll() is not None:
-                # Video process has terminated
-                exit_code = video_process.returncode
-                stderr_output = video_process.stderr.read().decode('utf-8', errors='ignore') if video_process.stderr else ""
-
-                logger.error(f"Video process terminated unexpectedly (exit code: {exit_code})")
-                logger.error(f"FFmpeg stderr: {stderr_output}")
-
-                # Update state
+            # Check video capture health
+            if video_capture and not video_capture.isOpened():
+                logger.error("Video capture is no longer open")
                 stream_state = StreamState.ERROR
-                stream_error_message = f"Video device became unavailable or FFmpeg failed (exit code: {exit_code})"
+                stream_error_message = "Video device became unavailable or disconnected"
 
-                if stderr_output:
-                    # Extract meaningful error from FFmpeg output
-                    if "No such file or directory" in stderr_output or "Cannot open" in stderr_output:
-                        stream_error_message = "Video device not found or inaccessible. Please check device connection."
-                    elif "Permission denied" in stderr_output:
-                        stream_error_message = "Permission denied accessing video device. Check device permissions."
-                    elif "Invalid argument" in stderr_output or "not supported" in stderr_output:
-                        stream_error_message = "Video format or settings not supported by device."
-                    else:
-                        # Include first line of error for debugging
-                        error_lines = [line for line in stderr_output.split('\n') if line.strip()]
-                        if error_lines:
-                            stream_error_message += f" Error: {error_lines[-1][:100]}"
-
-                # Stop audio process if running
-                if audio_process:
-                    audio_process.terminate()
-                    audio_process.wait()
-                    audio_process = None
+                # Stop audio if running
+                if audio_input_stream:
+                    try:
+                        audio_input_stream.stop_stream()
+                        audio_input_stream.close()
+                    except:
+                        pass
+                    audio_input_stream = None
 
                 logger.error(stream_error_message)
                 break
 
-            # Check audio process health (if enabled)
-            if audio_process and audio_process.poll() is not None:
-                # Audio process has terminated
-                exit_code = audio_process.returncode
-                stderr_output = audio_process.stderr.read().decode('utf-8', errors='ignore') if audio_process.stderr else ""
-
-                logger.warning(f"Audio process terminated unexpectedly (exit code: {exit_code})")
-                logger.warning(f"FFmpeg stderr: {stderr_output}")
-
-                # Audio failure is non-fatal - disable audio and continue video
-                current_config.audio_enabled = False
-                audio_process = None
-
-                logger.info("Audio disabled, continuing with video-only stream")
+            # Check audio stream health (if enabled)
+            if current_config.audio_enabled and audio_input_stream:
+                try:
+                    if not audio_input_stream.is_active():
+                        logger.warning("Audio stream is no longer active")
+                        current_config.audio_enabled = False
+                        audio_input_stream = None
+                        logger.info("Audio disabled, continuing with video-only stream")
+                except Exception as e:
+                    logger.warning(f"Audio stream check failed: {e}")
+                    current_config.audio_enabled = False
+                    audio_input_stream = None
 
             # Sleep briefly before next check
             time.sleep(1)
@@ -191,42 +166,22 @@ def monitor_stream_health():
     logger.info("Stream health monitor stopped")
 
 
-def gen_audio():
-    """Generate audio chunks from FFmpeg stdout"""
-    global audio_process
-
-    # Use the existing audio process started by /api/stream/start
-    if not current_config.audio_enabled or not audio_process:
-        logger.error("No audio process running or audio not enabled.")
-        return
-
-    try:
-        while audio_process and audio_process.poll() is None:
-            chunk = audio_process.stdout.read(8192)  # Smaller chunks for lower latency
-            if not chunk:
-                break
-            yield chunk
-    except Exception as e:
-        logger.error(f"Error in audio generator: {e}")
-
-
 def broadcast_audio():
     """Broadcast audio chunks to all connected WebSocket clients"""
-    global audio_process, audio_broadcast_running
+    global audio_input_stream, audio_broadcast_running
 
     logger.info("Audio broadcast thread started")
 
-    while audio_broadcast_running and audio_process:
+    while audio_broadcast_running and audio_input_stream:
         try:
-            if audio_process.poll() is not None:
-                logger.warning("Audio process terminated, stopping broadcast")
+            if not audio_input_stream.is_active():
+                logger.warning("Audio stream is not active, stopping broadcast")
                 break
 
-            chunk = audio_process.stdout.read(4096)
-            if not chunk:
-                break
+            # Read audio chunk
+            chunk = audio_input_stream.read(current_config.audio_chunk_size, exception_on_overflow=False)
 
-            # Broadcast to all connected clients
+            # Broadcast to all connected clients via WebSocket
             socketio.emit('audio_data', {'data': chunk.hex()}, namespace='/audio')
 
         except Exception as e:
@@ -242,13 +197,13 @@ def broadcast_audio():
 @socketio.on('connect', namespace='/audio')
 def handle_audio_connect():
     """Handle client connection to audio namespace"""
-    logger.info(f"Audio client connected")
+    logger.info("Audio client connected")
 
 
 @socketio.on('disconnect', namespace='/audio')
 def handle_audio_disconnect():
     """Handle client disconnection from audio namespace"""
-    logger.info(f"Audio client disconnected")
+    logger.info("Audio client disconnected")
 
 
 # REST API Endpoints
@@ -288,17 +243,19 @@ def start_stream():
     Expected JSON body:
     {
         "video_device": "/dev/video0",
-        "video_format": "yuyv422",
+        "video_device_index": 0,
         "resolution": [640, 480],
         "frame_rate": 30,
         "audio_enabled": false,
         "audio_device": null,
-        "audio_format": "s16le",
+        "audio_device_index": 0,
         "audio_sample_rate": 44100,
-        "audio_channels": 1
+        "audio_channels": 2
     }
     """
-    global current_config, video_process, audio_process, stream_state, stream_start_time, stream_error_message
+    global current_config, video_capture, audio_stream, audio_input_stream
+    global stream_state, stream_start_time, stream_error_message
+    global monitor_running, monitor_thread, audio_broadcast_running, audio_broadcast_thread
 
     try:
         # Check if stream is already running
@@ -337,20 +294,20 @@ def start_stream():
             }), 400
 
         # Validate required fields
-        if 'video_device' not in data:
+        if 'video_device_index' not in data and 'video_device' not in data:
             return jsonify({
                 'success': False,
                 'error': {
                     'code': 'MISSING_VIDEO_DEVICE',
-                    'message': 'video_device is required',
-                    'suggestion': 'Specify a video device path (e.g., /dev/video0)'
+                    'message': 'video_device or video_device_index is required',
+                    'suggestion': 'Specify a video device index (e.g., 0) or path (e.g., /dev/video0)'
                 }
             }), 400
 
         # Update configuration
         stream_state = StreamState.STARTING
-        current_config.video_device = data.get('video_device')
-        current_config.video_format = data.get('video_format', 'yuyv422')
+        current_config.video_device = data.get('video_device', '/dev/video0')
+        current_config.video_device_index = data.get('video_device_index', 0)
 
         # Handle resolution
         resolution = data.get('resolution', [640, 480])
@@ -362,9 +319,10 @@ def start_stream():
         current_config.frame_rate = data.get('frame_rate', 30)
         current_config.audio_enabled = data.get('audio_enabled', False)
         current_config.audio_device = data.get('audio_device')
-        current_config.audio_format = data.get('audio_format', 's16le')
+        current_config.audio_device_index = data.get('audio_device_index', 0)
         current_config.audio_sample_rate = data.get('audio_sample_rate', 44100)
-        current_config.audio_channels = data.get('audio_channels', 1)
+        current_config.audio_channels = data.get('audio_channels', 2)
+        current_config.audio_chunk_size = data.get('audio_chunk_size', 1024)
 
         # Validate configuration
         if current_config.resolution[0] <= 0 or current_config.resolution[1] <= 0:
@@ -391,7 +349,7 @@ def start_stream():
                 }
             }), 400
 
-        if current_config.audio_enabled and not current_config.audio_device:
+        if current_config.audio_enabled and current_config.audio_device_index is None:
             stream_state = StreamState.ERROR
             stream_error_message = 'Audio enabled but no audio device specified'
             return jsonify({
@@ -399,46 +357,40 @@ def start_stream():
                 'error': {
                     'code': 'MISSING_AUDIO_DEVICE',
                     'message': stream_error_message,
-                    'suggestion': 'Specify an audio device or disable audio'
+                    'suggestion': 'Specify an audio device index or disable audio'
                 }
             }), 400
 
-        # Stop any existing processes
-        if video_process:
-            video_process.terminate()
-            video_process.wait()
-            video_process = None
+        # Stop any existing streams
+        if video_capture:
+            video_capture.release()
+            video_capture = None
 
-        if audio_process:
-            audio_process.terminate()
-            audio_process.wait()
-            audio_process = None
+        if audio_input_stream:
+            try:
+                audio_input_stream.stop_stream()
+                audio_input_stream.close()
+            except:
+                pass
+            audio_input_stream = None
 
-        # Start video process
+        # Start video capture
         try:
-            video_process = subprocess.Popen(
-                current_config.to_ffmpeg_video_args(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=10**8
-            )
-            logger.info(f"Started video stream: {current_config.video_device} at {current_config.resolution[0]}x{current_config.resolution[1]}@{current_config.frame_rate}fps")
-        except FileNotFoundError as e:
-            stream_state = StreamState.ERROR
-            stream_error_message = "FFmpeg not found. Please install FFmpeg."
-            logger.error(stream_error_message)
-            return jsonify({
-                'success': False,
-                'error': {
-                    'code': 'FFMPEG_NOT_FOUND',
-                    'message': stream_error_message,
-                    'details': str(e),
-                    'suggestion': 'Install FFmpeg using your package manager (e.g., apt install ffmpeg)'
-                }
-            }), 500
+            video_capture = cv2.VideoCapture(current_config.video_device_index)
+
+            if not video_capture.isOpened():
+                raise Exception(f"Failed to open video device at index {current_config.video_device_index}")
+
+            # Set video properties
+            video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, current_config.resolution[0])
+            video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, current_config.resolution[1])
+            video_capture.set(cv2.CAP_PROP_FPS, current_config.frame_rate)
+
+            logger.info(f"Started video capture: device {current_config.video_device_index} at {current_config.resolution[0]}x{current_config.resolution[1]}@{current_config.frame_rate}fps")
+
         except Exception as e:
             stream_state = StreamState.ERROR
-            stream_error_message = f"Failed to start video stream: {str(e)}"
+            stream_error_message = f"Failed to start video capture: {str(e)}"
             logger.error(stream_error_message)
             return jsonify({
                 'success': False,
@@ -446,32 +398,39 @@ def start_stream():
                     'code': 'VIDEO_START_FAILED',
                     'message': 'Failed to start video stream',
                     'details': str(e),
-                    'suggestion': 'Check that the video device exists and is accessible. Verify device path and permissions.'
+                    'suggestion': 'Check that the video device exists and is accessible. Verify device index and permissions.'
                 }
             }), 500
 
-        # Start audio process if enabled
+        # Start audio capture if enabled
         if current_config.audio_enabled:
             try:
-                audio_process = subprocess.Popen(
-                    current_config.to_ffmpeg_audio_args(),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    bufsize=10**8
+                audio_stream = pyaudio.PyAudio()
+                audio_input_stream = audio_stream.open(
+                    format=pyaudio.paInt16,
+                    channels=current_config.audio_channels,
+                    rate=current_config.audio_sample_rate,
+                    input=True,
+                    input_device_index=current_config.audio_device_index,
+                    frames_per_buffer=current_config.audio_chunk_size
                 )
-                logger.info(f"Started audio stream: {current_config.audio_device} at {current_config.audio_sample_rate}Hz")
+
+                logger.info(f"Started audio capture: device {current_config.audio_device_index} at {current_config.audio_sample_rate}Hz, {current_config.audio_channels} channels")
 
                 # Start audio broadcast thread
-                global audio_broadcast_running, audio_broadcast_thread
                 audio_broadcast_running = True
                 audio_broadcast_thread = threading.Thread(target=broadcast_audio, daemon=True)
                 audio_broadcast_thread.start()
                 logger.info("Audio WebSocket broadcast enabled")
+
             except Exception as e:
                 # Audio failure is non-fatal - continue with video only
                 logger.warning(f"Failed to start audio stream: {e}. Continuing with video-only mode.")
                 current_config.audio_enabled = False
-                audio_process = None
+                audio_input_stream = None
+                if audio_stream:
+                    audio_stream.terminate()
+                    audio_stream = None
 
         # Update state
         stream_state = StreamState.RUNNING
@@ -489,11 +448,12 @@ def start_stream():
             'message': 'Stream started successfully',
             'config': {
                 'video_device': current_config.video_device,
-                'video_format': current_config.video_format,
+                'video_device_index': current_config.video_device_index,
                 'resolution': list(current_config.resolution),
                 'frame_rate': current_config.frame_rate,
                 'audio_enabled': current_config.audio_enabled,
-                'audio_device': current_config.audio_device
+                'audio_device': current_config.audio_device,
+                'audio_device_index': current_config.audio_device_index
             }
         })
 
@@ -516,7 +476,9 @@ def stop_stream():
     """
     Stop all active streams (video and audio).
     """
-    global video_process, audio_process, stream_state, stream_start_time, stream_error_message, monitor_running, monitor_thread, audio_broadcast_running, audio_broadcast_thread
+    global video_capture, audio_stream, audio_input_stream
+    global stream_state, stream_start_time, stream_error_message
+    global monitor_running, monitor_thread, audio_broadcast_running, audio_broadcast_thread
 
     try:
         # Stop monitoring thread
@@ -535,19 +497,28 @@ def stop_stream():
                 audio_broadcast_thread = None
             logger.info("Audio broadcast stopped")
 
-        # Stop video process
-        if video_process:
-            video_process.terminate()
-            video_process.wait(timeout=5)
-            video_process = None
-            logger.info("Stopped video stream")
-
-        # Stop audio process
-        if audio_process:
-            audio_process.terminate()
-            audio_process.wait(timeout=5)
-            audio_process = None
+        # Stop audio stream
+        if audio_input_stream:
+            try:
+                audio_input_stream.stop_stream()
+                audio_input_stream.close()
+            except:
+                pass
+            audio_input_stream = None
             logger.info("Stopped audio stream")
+
+        if audio_stream:
+            try:
+                audio_stream.terminate()
+            except:
+                pass
+            audio_stream = None
+
+        # Stop video capture
+        if video_capture:
+            video_capture.release()
+            video_capture = None
+            logger.info("Stopped video capture")
 
         # Update state
         stream_state = StreamState.STOPPED
@@ -559,23 +530,6 @@ def stop_stream():
             'message': 'Stream stopped successfully'
         })
 
-    except subprocess.TimeoutExpired:
-        logger.error("Timeout while stopping stream processes")
-        # Force kill if timeout
-        if video_process:
-            video_process.kill()
-            video_process = None
-        if audio_process:
-            audio_process.kill()
-            audio_process = None
-
-        stream_state = StreamState.STOPPED
-        stream_start_time = None
-
-        return jsonify({
-            'success': True,
-            'message': 'Stream stopped (forced termination)'
-        })
     except Exception as e:
         logger.error(f"Error stopping stream: {e}")
         return jsonify({
@@ -605,7 +559,7 @@ def get_stream_status():
             'success': True,
             'state': stream_state.value,
             'uptime_seconds': uptime_seconds,
-            'audio_active': current_config.audio_enabled and audio_process is not None,
+            'audio_active': current_config.audio_enabled and audio_input_stream is not None,
             'error_message': stream_error_message
         }
 
@@ -613,12 +567,12 @@ def get_stream_status():
         if stream_state in [StreamState.RUNNING, StreamState.STARTING, StreamState.ERROR]:
             status['config'] = {
                 'video_device': current_config.video_device,
-                'video_format': current_config.video_format,
+                'video_device_index': current_config.video_device_index,
                 'resolution': list(current_config.resolution),
                 'frame_rate': current_config.frame_rate,
                 'audio_enabled': current_config.audio_enabled,
                 'audio_device': current_config.audio_device,
-                'audio_format': current_config.audio_format,
+                'audio_device_index': current_config.audio_device_index,
                 'audio_sample_rate': current_config.audio_sample_rate,
                 'audio_channels': current_config.audio_channels
             }
@@ -637,30 +591,12 @@ def get_stream_status():
         }), 500
 
 
-
-
 # Stream Endpoints
 
 @app.route('/video_feed')
 def video_feed():
+    """Stream video via MJPEG over HTTP"""
     return Response(gen_video(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-
-@app.route('/audio_feed')
-def audio_feed():
-    """Stream audio if enabled"""
-    if not current_config.audio_enabled:
-        return Response("Audio not enabled", status=400)
-
-    def generate():
-        for chunk in gen_audio():
-            yield chunk
-
-    return Response(generate(), mimetype='audio/mpeg', headers={
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
-    })
 
 
 @app.route('/')
@@ -677,6 +613,7 @@ def index():
 def serve_static(filename):
     """Serve static files"""
     return send_from_directory('static', filename)
+
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=8080, debug=False, allow_unsafe_werkzeug=True)
