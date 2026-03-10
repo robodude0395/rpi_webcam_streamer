@@ -441,8 +441,29 @@
                 // Show audio stream if enabled
                 if (audioEnabled) {
                     audioContainer.style.display = 'block';
-                    audioPlayer.src = `/audio_feed?t=${Date.now()}`;
-                    audioPlayer.play().catch(e => console.log('Audio autoplay prevented:', e));
+                    const audioUrl = `/audio_feed?t=${Date.now()}`;
+                    console.log('Loading audio from:', audioUrl);
+                    audioPlayer.src = audioUrl;
+
+                    // Add error handlers
+                    audioPlayer.onerror = (e) => {
+                        console.error('Audio player error:', e);
+                        console.error('Audio error code:', audioPlayer.error?.code);
+                        console.error('Audio error message:', audioPlayer.error?.message);
+                    };
+
+                    audioPlayer.onloadedmetadata = () => {
+                        console.log('Audio metadata loaded');
+                    };
+
+                    audioPlayer.oncanplay = () => {
+                        console.log('Audio can play');
+                    };
+
+                    audioPlayer.play().catch(e => {
+                        console.error('Audio autoplay prevented or failed:', e);
+                        showError('Audio autoplay blocked. Click the play button on the audio player.');
+                    });
                 } else {
                     audioContainer.style.display = 'none';
                 }

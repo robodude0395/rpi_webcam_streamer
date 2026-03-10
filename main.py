@@ -63,12 +63,8 @@ class StreamConfig:
             "-ac", str(self.audio_channels),
             "-c:a", "libopus",
             "-b:a", "64k",
-            "-frame_duration", "20",
             "-application", "voip",
             "-f", "webm",
-            "-live", "1",
-            "-dash", "1",
-            "-chunk_duration", "100",
             "pipe:1"
         ]
 
@@ -589,6 +585,7 @@ def video_feed():
     return Response(gen_video(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+@app.route('/audio_feed')
 def audio_feed():
     """Stream audio if enabled with low latency"""
     if not current_config.audio_enabled:
