@@ -61,10 +61,8 @@ class StreamConfig:
             "-i", self.audio_device,
             "-ar", str(self.audio_sample_rate),
             "-ac", str(self.audio_channels),
-            "-c:a", "libopus",
-            "-b:a", "64k",
-            "-application", "voip",
-            "-f", "webm",
+            "-f", "wav",
+            "-c:a", "pcm_s16le",
             "pipe:1"
         ]
 
@@ -590,7 +588,7 @@ def audio_feed():
     """Stream audio if enabled with low latency"""
     if not current_config.audio_enabled:
         return Response("Audio not enabled", status=400)
-    return Response(gen_audio(), mimetype='audio/webm')
+    return Response(gen_audio(), mimetype='audio/wav')
 
 
 @app.route('/')
