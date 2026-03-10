@@ -240,6 +240,20 @@ def broadcast_audio():
     logger.info("Audio broadcast thread stopped")
 
 
+# Socket.IO Event Handlers
+
+@socketio.on('connect', namespace='/audio')
+def handle_audio_connect():
+    """Handle client connection to audio namespace"""
+    logger.info(f"Audio client connected")
+
+
+@socketio.on('disconnect', namespace='/audio')
+def handle_audio_disconnect():
+    """Handle client disconnection from audio namespace"""
+    logger.info(f"Audio client disconnected")
+
+
 # REST API Endpoints
 
 @app.route('/api/devices', methods=['GET'])
