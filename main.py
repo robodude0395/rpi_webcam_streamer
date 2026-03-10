@@ -52,7 +52,7 @@ class StreamConfig:
         ]
 
     def to_ffmpeg_audio_args(self) -> List[str]:
-        """Generate FFmpeg arguments for audio capture"""
+        """Generate FFmpeg arguments for audio capture with low latency"""
         if not self.audio_enabled or not self.audio_device:
             return []
         return [
@@ -61,8 +61,14 @@ class StreamConfig:
             "-i", self.audio_device,
             "-ar", str(self.audio_sample_rate),
             "-ac", str(self.audio_channels),
-            "-f", "mp3",
-            "-b:a", "128k",
+            "-c:a", "libopus",
+            "-b:a", "64k",
+            "-frame_duration", "20",
+            "-application", "voip",
+            "-f", "webm",
+            "-live", "1",
+            "-dash", "1",
+            "-chunk_duration", "100",
             "pipe:1"
         ]
 
@@ -584,10 +590,10 @@ def video_feed():
 
 
 def audio_feed():
-    """Stream audio if enabled"""
+    """Stream audio if enabled with low latency"""
     if not current_config.audio_enabled:
         return Response("Audio not enabled", status=400)
-    return Response(gen_audio(), mimetype='audio/mpeg')
+    return Response(gen_audio(), mimetype='audio/webm')
 
 
 @app.route('/')
