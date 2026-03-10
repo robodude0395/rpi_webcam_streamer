@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Streamer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        select, input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            background: white;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            cursor: pointer;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-start {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn-start:hover:not(:disabled) {
+            background: #45a049;
+        }
+
+        .btn-stop {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background: #da190b;
+        }
+
+        .btn-refresh {
+            background: #2196F3;
+            color: white;
+        }
+
+        .btn-refresh:hover:not(:disabled) {
+            background: #0b7dda;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .status.stopped {
+            background: #f5f5f5;
+            color: #666;
+        }
+
+        .status.starting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.running {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-label {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .stream-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+
+        .video-container {
+            background: #000;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 400px;
+        }
+
+        .video-container img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .video-placeholder {
+            color: #999;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .audio-container {
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+
+        audio {
+            width: 100%;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+
+            .controls {
+                grid-template-columns: 1fr;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Webcam Streamer</h1>
+
+        <div class="error-message" id="errorMessage"></div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="videoDevice">Video Device</label>
+                <select id="videoDevice">
+                    <option value="">Loading devices...</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="resolution">Resolution</label>
+                <select id="resolution">
+                    <option value="640,480">640x480</option>
+                    <option value="800,600">800x600</option>
+                    <option value="1280,720">1280x720</option>
+                    <option value="1920,1080">1920x1080</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="frameRate">Frame Rate</label>
+                <select id="frameRate">
+                    <option value="15">15 fps</option>
+                    <option value="30" selected>30 fps</option>
+                    <option value="60">60 fps</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="audioDevice">Audio Device</label>
+                <select id="audioDevice">
+                    <option value="">No audio</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="audioEnabled">
+                    <label for="audioEnabled">Enable Audio</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button class="btn-start" id="startBtn">Start Stream</button>
+            <button class="btn-stop" id="stopBtn" disabled>Stop Stream</button>
+            <button class="btn-refresh" id="refreshBtn">Refresh Devices</button>
+        </div>
+
+        <div class="status stopped" id="status">
+            <div class="status-label">Status: Stopped</div>
+            <div id="statusDetails">Click "Start Stream" to begin</div>
+        </div>
+
+        <div class="stream-container">
+            <div class="video-container" id="videoContainer">
+                <div class="video-placeholder">Video stream will appear here</div>
+            </div>
+
+            <div class="audio-container" id="audioContainer" style="display: none;">
+                <audio id="audioPlayer" controls></audio>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let devices = { video_devices: [], audio_devices: [] };
+        let streamActive = false;
+        let statusInterval = null;
+
+        // DOM elements
+        const videoDeviceSelect = document.getElementById('videoDevice');
+        const audioDeviceSelect = document.getElementById('audioDevice');
+        const resolutionSelect = document.getElementById('resolution');
+        const frameRateSelect = document.getElementById('frameRate');
+        const audioEnabledCheckbox = document.getElementById('audioEnabled');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const statusDiv = document.getElementById('status');
+        const statusDetails = document.getElementById('statusDetails');
+        const videoContainer = document.getElementById('videoContainer');
+        const audioContainer = document.getElementById('audioContainer');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const errorMessage = document.getElementById('errorMessage');
+
+        // Initialize
+        loadDevices();
+
+        // Event listeners
+        startBtn.addEventListener('click', startStream);
+        stopBtn.addEventListener('click', stopStream);
+        refreshBtn.addEventListener('click', loadDevices);
+        audioEnabledCheckbox.addEventListener('change', updateAudioDeviceState);
+
+        function updateAudioDeviceState() {
+            audioDeviceSelect.disabled = !audioEnabledCheckbox.checked;
+        }
+
+        async function loadDevices() {
+            try {
+                showError('');
+                refreshBtn.disabled = true;
+                refreshBtn.textContent = 'Loading...';
+
+                const response = await fetch('/api/devices');
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error?.message || 'Failed to load devices');
+                }
+
+                devices = data;
+
+                // Populate video devices
+                videoDeviceSelect.innerHTML = '';
+                if (devices.video_devices.length === 0) {
+                    videoDeviceSelect.innerHTML = '<option value="">No video devices found</option>';
+                } else {
+                    devices.video_devices.forEach(device => {
+                        const option = document.createElement('option');
+                        option.value = device.device_path;
+                        option.textContent = `${device.device_name} (${device.device_path})`;
+                        videoDeviceSelect.appendChild(option);
+                    });
+                }
+
+                // Populate audio devices
+                audioDeviceSelect.innerHTML = '<option value="">No audio</option>';
+                devices.audio_devices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.device_path;
+                    option.textContent = `${device.device_name} (${device.device_path})`;
+                    audioDeviceSelect.appendChild(option);
+                });
+
+                updateAudioDeviceState();
+
+            } catch (error) {
+                showError(`Failed to load devices: ${error.message}`);
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Refresh Devices';
+            }
+        }
+
+        async function startStream() {
+            try {
+                showError('');
+
+                const videoDevice = videoDeviceSelect.value;
+                if (!videoDevice) {
+                    showError('Please select a video device');
+                    return;
+                }
+
+                const resolution = resolutionSelect.value.split(',').map(Number);
+                const frameRate = parseInt(frameRateSelect.value);
+                const audioEnabled = audioEnabledCheckbox.checked;
+                const audioDevice = audioDeviceSelect.value || null;
+
+                if (audioEnabled && !audioDevice) {
+                    showError('Please select an audio device or disable audio');
+                    return;
+                }
+
+                startBtn.disabled = true;
+                startBtn.textContent = 'Starting...';
+
+                const config = {
+                    video_device: videoDevice,
+                    video_format: 'yuyv422',
+                    resolution: resolution,
+                    frame_rate: frameRate,
+                    audio_enabled: audioEnabled,
+                    audio_device: audioDevice,
+                    audio_format: 's16le',
+                    audio_sample_rate: 44100,
+                    audio_channels: 1
+                };
+
+                const response = await fetch('/api/stream/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error?.message || 'Failed to start stream');
+                }
+
+                streamActive = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                startBtn.textContent = 'Start Stream';
+
+                // Show video stream
+                videoContainer.innerHTML = `<img src="/video_feed?t=${Date.now()}" alt="Video Stream">`;
+
+                // Show audio stream if enabled
+                if (audioEnabled) {
+                    audioContainer.style.display = 'block';
+                    audioPlayer.src = `/audio_feed?t=${Date.now()}`;
+                    audioPlayer.play().catch(e => console.log('Audio autoplay prevented:', e));
+                } else {
+                    audioContainer.style.display = 'none';
+                }
+
+                // Start status polling
+                statusInterval = setInterval(updateStatus, 1000);
+                updateStatus();
+
+            } catch (error) {
+                showError(`Failed to start stream: ${error.message}`);
+                startBtn.disabled = false;
+                startBtn.textContent = 'Start Stream';
+            }
+        }
+
+        async function stopStream() {
+            try {
+                showError('');
+                stopBtn.disabled = true;
+                stopBtn.textContent = 'Stopping...';
+
+                const response = await fetch('/api/stream/stop', {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error?.message || 'Failed to stop stream');
+                }
+
+                streamActive = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                stopBtn.textContent = 'Stop Stream';
+
+                // Clear video stream
+                videoContainer.innerHTML = '<div class="video-placeholder">Video stream will appear here</div>';
+
+                // Clear audio stream
+                audioContainer.style.display = 'none';
+                audioPlayer.src = '';
+
+                // Stop status polling
+                if (statusInterval) {
+                    clearInterval(statusInterval);
+                    statusInterval = null;
+                }
+
+                updateStatusDisplay('stopped', 'Stream stopped');
+
+            } catch (error) {
+                showError(`Failed to stop stream: ${error.message}`);
+                stopBtn.disabled = false;
+                stopBtn.textContent = 'Stop Stream';
+            }
+        }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/stream/status');
+                const data = await response.json();
+
+                if (data.success) {
+                    const state = data.state;
+                    let details = '';
+
+                    if (state === 'running' && data.config) {
+                        const uptime = Math.floor(data.uptime_seconds);
+                        const minutes = Math.floor(uptime / 60);
+                        const seconds = uptime % 60;
+                        details = `Resolution: ${data.config.resolution[0]}x${data.config.resolution[1]} @ ${data.config.frame_rate}fps`;
+                        details += `<br>Uptime: ${minutes}m ${seconds}s`;
+                        if (data.audio_active) {
+                            details += `<br>Audio: ${data.config.audio_device}`;
+                        }
+                    } else if (state === 'error') {
+                        details = data.error_message || 'Unknown error';
+                    }
+
+                    updateStatusDisplay(state, details);
+                }
+            } catch (error) {
+                console.error('Failed to update status:', error);
+            }
+        }
+
+        function updateStatusDisplay(state, details) {
+            statusDiv.className = `status ${state}`;
+            const stateLabel = state.charAt(0).toUpperCase() + state.slice(1);
+            statusDiv.querySelector('.status-label').textContent = `Status: ${stateLabel}`;
+            statusDetails.innerHTML = details;
+        }
+
+        function showError(message) {
+            if (message) {
+                errorMessage.textContent = message;
+                errorMessage.style.display = 'block';
+            } else {
+                errorMessage.style.display = 'none';
+            }
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (statusInterval) {
+                clearInterval(statusInterval);
+            }
+        });
+    </script>
+</body>
+</html>
