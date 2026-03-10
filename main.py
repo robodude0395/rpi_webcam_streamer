@@ -61,7 +61,8 @@ class StreamConfig:
             "-i", self.audio_device,
             "-ar", str(self.audio_sample_rate),
             "-ac", str(self.audio_channels),
-            "-f", self.audio_format,
+            "-f", "mp3",
+            "-b:a", "128k",
             "pipe:1"
         ]
 
@@ -582,12 +583,11 @@ def video_feed():
     return Response(gen_video(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
-@app.route('/audio_feed')
 def audio_feed():
     """Stream audio if enabled"""
     if not current_config.audio_enabled:
         return Response("Audio not enabled", status=400)
-    return Response(gen_audio(), mimetype='audio/x-raw')
+    return Response(gen_audio(), mimetype='audio/mpeg')
 
 
 @app.route('/')
