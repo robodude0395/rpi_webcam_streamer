@@ -81,16 +81,13 @@ def gen_video():
     """Generate MJPEG frames from FFmpeg stdout"""
     global video_process
 
-    # Start video process with current configuration
-    video_process = subprocess.Popen(
-        current_config.to_ffmpeg_video_args(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=10**8
-    )
+    # Use the existing video process started by /api/stream/start
+    if not video_process:
+        logger.error("No video process running. Start stream via /api/stream/start first.")
+        return
 
     try:
-        while True:
+        while video_process and video_process.poll() is None:
             # MJPEG frames are separated by 0xFFD8 (start) and 0xFFD9 (end)
             data = b''
             while True:
@@ -105,10 +102,8 @@ def gen_video():
                        b'Content-Type: image/jpeg\r\n\r\n' + data + b'\r\n')
             else:
                 break
-    finally:
-        if video_process:
-            video_process.terminate()
-            video_process.wait()
+    except Exception as e:
+        logger.error(f"Error in video generator: {e}")
 
 
 def monitor_stream_health():
@@ -192,27 +187,19 @@ def gen_audio():
     """Generate audio chunks from FFmpeg stdout"""
     global audio_process
 
-    if not current_config.audio_enabled or not current_config.audio_device:
+    # Use the existing audio process started by /api/stream/start
+    if not current_config.audio_enabled or not audio_process:
+        logger.error("No audio process running or audio not enabled.")
         return
 
-    # Start audio process with current configuration
-    audio_process = subprocess.Popen(
-        current_config.to_ffmpeg_audio_args(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=10**8
-    )
-
     try:
-        while True:
+        while audio_process and audio_process.poll() is None:
             chunk = audio_process.stdout.read(4096)
             if not chunk:
                 break
             yield chunk
-    finally:
-        if audio_process:
-            audio_process.terminate()
-            audio_process.wait()
+    except Exception as e:
+        logger.error(f"Error in audio generator: {e}")
 
 
 # REST API Endpoints
