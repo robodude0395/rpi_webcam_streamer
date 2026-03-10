@@ -2,7 +2,7 @@
 
 A Flask-based real-time webcam and audio streaming application optimized for Raspberry Pi with automatic device detection, low-latency audio, and efficient resource usage.
 
-![Architecture](diagrams/architecture.md)
+![Architecture](diagrams/architecture.png)
 
 ## Features
 
