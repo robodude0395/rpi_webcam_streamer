@@ -507,6 +507,10 @@
                     const option = document.createElement('option');
                     option.value = device.device_path;
                     option.textContent = `${device.device_name} (${device.device_path})`;
+                    // Store PyAudio index as data attribute
+                    if (device.pyaudio_index !== null && device.pyaudio_index !== undefined) {
+                        option.dataset.pyaudioIndex = device.pyaudio_index;
+                    }
                     audioDeviceSelect.appendChild(option);
                 });
 
@@ -549,7 +553,8 @@
                     resolution: resolution,
                     frame_rate: frameRate,
                     audio_enabled: audioEnabled,
-                    audio_device_index: 1,  // Default audio device
+                    audio_device_name: audioDevice,  // ALSA device path like "hw:2,0"
+                    audio_device_index: audioDeviceSelect.selectedOptions[0]?.dataset.pyaudioIndex || 1,
                     audio_sample_rate: 16000,  // Match server config
                     audio_channels: 1  // Mono for efficiency
                 };
