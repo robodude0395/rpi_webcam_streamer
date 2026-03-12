@@ -50,7 +50,6 @@ class StreamConfig:
     frame_rate: int = 15  # Lower default for RPi efficiency
     audio_enabled: bool = False
     audio_device_index: int = 1
-    audio_device_name: str = None  # ALSA device name like "hw:2,0"
     audio_sample_rate: int = 16000  # Lower rate for efficiency
     audio_channels: int = 1  # Mono for efficiency
     audio_chunk_size: int = 512  # Balance latency/CPU
@@ -185,15 +184,6 @@ def get_devices():
         video_devices = device_detector.detect_video_devices()
         audio_devices = device_detector.detect_audio_devices()
 
-        # Add PyAudio device indices to audio devices
-        for audio_dev in audio_devices:
-            device_path = audio_dev.get('device_path')
-            if device_path:
-                pyaudio_index = get_pyaudio_device_index_for_alsa(device_path)
-                audio_dev['pyaudio_index'] = pyaudio_index
-                if pyaudio_index is not None:
-                    logger.info(f"Audio device {device_path} mapped to PyAudio index {pyaudio_index}")
-
         return jsonify({
             'success': True,
             'video_devices': video_devices,
@@ -210,57 +200,6 @@ def get_devices():
                 'details': str(e)
             }
         }), 500
-def get_pyaudio_device_index_for_alsa(alsa_device_path: str) -> Optional[int]:
-    """
-    Find PyAudio device index for an ALSA device path (e.g., "hw:2,0").
-    Returns None if not found or if PyAudio is not available.
-
-    This function safely queries PyAudio devices without triggering segfaults
-    by catching all exceptions during device enumeration.
-    """
-    if not PYAUDIO_AVAILABLE:
-        return None
-
-    try:
-        p = pyaudio.PyAudio()
-
-        # Extract card and device numbers from ALSA path
-        # Format: "hw:CARD,DEVICE" or "hw:2,0"
-        import re
-        match = re.match(r'hw:(\d+),(\d+)', alsa_device_path)
-        if not match:
-            logger.warning(f"Invalid ALSA device path format: {alsa_device_path}")
-            p.terminate()
-            return None
-
-        card_num = match.group(1)
-
-        # Search for matching PyAudio device
-        for i in range(p.get_device_count()):
-            try:
-                info = p.get_device_info_by_index(i)
-                # Check if this is an input device
-                if info['maxInputChannels'] > 0:
-                    # PyAudio device names often contain the card number or "USB"
-                    device_name = str(info.get('name', ''))
-                    # Match by card number or USB keyword
-                    if f"card {card_num}" in device_name.lower() or \
-                       (card_num == '2' and 'usb' in device_name.lower()):
-                        logger.info(f"Mapped {alsa_device_path} to PyAudio device {i}: {device_name}")
-                        p.terminate()
-                        return i
-            except Exception as e:
-                # Skip devices that can't be queried
-                continue
-
-        p.terminate()
-        logger.warning(f"Could not find PyAudio device for {alsa_device_path}")
-        return None
-
-    except Exception as e:
-        logger.error(f"Error mapping ALSA device to PyAudio: {e}")
-        return None
-
 
 
 def _cleanup_streams():
@@ -329,19 +268,7 @@ def start_stream():
 
         current_config.frame_rate = data.get('frame_rate', 15)
         current_config.audio_enabled = data.get('audio_enabled', False)
-        current_config.audio_device_name = data.get('audio_device_name', None)
-
-        # If audio_device_name is provided, try to map it to PyAudio index
-        if current_config.audio_device_name:
-            pyaudio_index = get_pyaudio_device_index_for_alsa(current_config.audio_device_name)
-            if pyaudio_index is not None:
-                current_config.audio_device_index = pyaudio_index
-            else:
-                # Fallback to provided index or default
-                current_config.audio_device_index = data.get('audio_device_index', 1)
-        else:
-            current_config.audio_device_index = data.get('audio_device_index', 1)
-
+        current_config.audio_device_index = data.get('audio_device_index', 1)
         current_config.audio_sample_rate = data.get('audio_sample_rate', 16000)
         current_config.audio_channels = data.get('audio_channels', 1)
         current_config.audio_chunk_size = data.get('audio_chunk_size', 512)
@@ -378,20 +305,13 @@ def start_stream():
                 if not audio_stream:
                     audio_stream = pyaudio.PyAudio()
 
-                # Pre-open audio stream
                 if not audio_input_stream:
-                    # Try to open the audio device directly by index
-                    # Avoid device enumeration which can cause ALSA errors/segfaults
-                    device_index = current_config.audio_device_index
-
-                    logger.info(f"Opening audio device index {device_index}")
-
                     audio_input_stream = audio_stream.open(
                         format=pyaudio.paInt16,
                         channels=current_config.audio_channels,
                         rate=current_config.audio_sample_rate,
                         input=True,
-                        input_device_index=device_index,
+                        input_device_index=current_config.audio_device_index,
                         frames_per_buffer=current_config.audio_chunk_size,
                         stream_callback=audio_callback
                     )
@@ -401,7 +321,6 @@ def start_stream():
             except Exception as e:
                 logger.warning(f"Audio setup failed: {e}. Continuing with video only.")
                 current_config.audio_enabled = False
-                # Clean up partial audio initialization
                 if audio_input_stream:
                     try:
                         audio_input_stream.stop_stream()
