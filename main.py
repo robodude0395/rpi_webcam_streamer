@@ -306,17 +306,18 @@ def start_stream():
                     audio_stream = pyaudio.PyAudio()
 
                 if not audio_input_stream:
+                    # Use default device (None) to avoid device enumeration issues
                     audio_input_stream = audio_stream.open(
                         format=pyaudio.paInt16,
                         channels=current_config.audio_channels,
                         rate=current_config.audio_sample_rate,
                         input=True,
-                        input_device_index=current_config.audio_device_index,
+                        input_device_index=None,
                         frames_per_buffer=current_config.audio_chunk_size,
                         stream_callback=audio_callback
                     )
 
-                logger.info(f"Audio ready: device {current_config.audio_device_index}, {current_config.audio_sample_rate}Hz, {current_config.audio_channels}ch")
+                logger.info(f"Audio ready: default device, {current_config.audio_sample_rate}Hz, {current_config.audio_channels}ch")
 
             except Exception as e:
                 logger.warning(f"Audio setup failed: {e}. Continuing with video only.")

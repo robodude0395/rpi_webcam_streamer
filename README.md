@@ -191,6 +191,21 @@ python tests/test_manual_device_detection.py
 - Verify audio device: `arecord -l`
 - Check browser console for errors
 - Hard refresh browser (Ctrl+Shift+R)
+- **If segfault occurs**: ALSA is misconfigured. Create `~/.asoundrc`:
+  ```bash
+  cat > ~/.asoundrc << 'EOF'
+  pcm.!default {
+      type hw
+      card 2
+      device 0
+  }
+  ctl.!default {
+      type hw
+      card 2
+  }
+  EOF
+  ```
+  Replace `card 2` with your USB audio card number from `arecord -l`, then restart the app.
 
 ### Video Lag
 - Reduce resolution

@@ -507,10 +507,6 @@
                     const option = document.createElement('option');
                     option.value = device.device_path;
                     option.textContent = `${device.device_name} (${device.device_path})`;
-                    // Store PyAudio index as data attribute
-                    if (device.pyaudio_index !== null && device.pyaudio_index !== undefined) {
-                        option.dataset.pyaudioIndex = device.pyaudio_index;
-                    }
                     audioDeviceSelect.appendChild(option);
                 });
 
@@ -549,14 +545,13 @@
 
                 const config = {
                     video_device: videoDevice,
-                    video_device_index: 0,  // Will be parsed from device path
+                    video_device_index: 0,
                     resolution: resolution,
                     frame_rate: frameRate,
                     audio_enabled: audioEnabled,
-                    audio_device_name: audioDevice,  // ALSA device path like "hw:2,0"
-                    audio_device_index: audioDeviceSelect.selectedOptions[0]?.dataset.pyaudioIndex || 1,
-                    audio_sample_rate: 16000,  // Match server config
-                    audio_channels: 1  // Mono for efficiency
+                    audio_device_index: 1,
+                    audio_sample_rate: 16000,
+                    audio_channels: 1
                 };
 
                 const response = await fetch('/api/stream/start', {
