@@ -180,8 +180,9 @@
         }
 
         .video-container img {
-            max-width: 100%;
-            height: auto;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
             display: block;
         }
 
@@ -246,6 +247,7 @@
             <div class="control-group">
                 <label for="resolution">Resolution</label>
                 <select id="resolution">
+                    <option value="80,60">80x60 (Ultra Low)</option>
                     <option value="160,120">160x120 (Pi Zero)</option>
                     <option value="320,240" selected>320x240 (Pi Zero)</option>
                     <option value="640,480">640x480</option>
