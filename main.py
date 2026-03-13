@@ -44,15 +44,15 @@ class StreamState(Enum):
 
 @dataclass
 class StreamConfig:
-    """Configuration for video and audio streams - optimized for RPi"""
+    """Configuration for video and audio streams - optimized for RPi Zero"""
     video_device_index: int = 0
-    resolution: tuple = (640, 480)
-    frame_rate: int = 15  # Lower default for RPi efficiency
+    resolution: tuple = (320, 240)  # Lower for Pi Zero
+    frame_rate: int = 10  # Lower for Pi Zero
     audio_enabled: bool = False
     audio_device_index: int = 1
     audio_sample_rate: int = 16000  # Lower rate for efficiency
     audio_channels: int = 1  # Mono for efficiency
-    audio_chunk_size: int = 512  # Balance latency/CPU
+    audio_chunk_size: int = 1024  # Larger chunks = less CPU
 
 
 # Global state
@@ -86,7 +86,7 @@ def gen_video():
                 frame = cv2.resize(frame, current_config.resolution)
 
             # Encode as JPEG with quality setting for efficiency
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # 80% quality
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 60]  # Lower quality for Pi Zero
             ret, jpeg = cv2.imencode('.jpg', frame, encode_param)
             if not ret:
                 continue

@@ -21,11 +21,13 @@ A Flask-based real-time webcam and audio streaming application optimized for Ras
 ```bash
 # System dependencies (Debian/Ubuntu/Raspberry Pi OS)
 sudo apt-get update
-sudo apt-get install v4l-utils alsa-utils python3-opencv python3-pyaudio
+sudo apt-get install v4l-utils alsa-utils python3-opencv python3-pyaudio python3-gevent libffi-dev
 
-# Python dependencies
+# Python dependencies (minimal - uses system packages)
 pip install -r requirements.txt
 ```
+
+**Note for Raspberry Pi Zero:** Using system packages (`python3-gevent`, `python3-opencv`) avoids 20-30 minute compilation times.
 
 ### Running
 
@@ -175,6 +177,12 @@ python tests/test_manual_device_detection.py
 ```
 
 ## Troubleshooting
+
+### Installation Errors
+
+**"ffi.h: No such file or directory" or "Package libffi was not found"**
+- Install libffi development headers: `sudo apt-get install libffi-dev`
+- Then retry: `pip install -r requirements.txt`
 
 ### High CPU Usage
 - Reduce frame rate: `frame_rate: 10`
